@@ -1,0 +1,119 @@
+#!/bin/sh
+
+# help
+if [ -z "${1}" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+    echo "Manage HP Servers via iLO."
+    echo "List all available scripts:"
+    echo "  hpilo list"
+    echo "Usage:"
+    echo "  hpilo <HOST> <USER> <PASS> <XML_SCRIPT> <FIND_STRING>"
+    echo "Example:"
+    echo "  hpilo sqlserver peteradmin l33tpass Get_PowerCap.xml 'Power'"
+    echo "Use 'False' for <FIND_STRING> to supress all output."
+    echo "Put your own custom xml scripts in ~/.hpilo-scripts ."
+    echo "Put firmware/bios update files in ~/.hpilo-scripts/firmware ."
+    echo "Good practice is to copy a script from /var/lib/hpilo-perl-control"
+    echo "to ~/.hpilo-scripts and modify it."
+    exit 0
+fi
+
+# variables
+ILO_HOST="$1"
+ILO_USER="$2"
+ILO_PASS="$3"
+XML_SCRIPT="$4"
+FIND_DATA="$5"
+
+# get the directory name of the scripts exe
+APP_DIR_FULL=$(realpath "$0")
+APP_DIR=$(dirname "$APP_DIR_FULL")
+
+# path variables
+SCRIPTS_USER="$HOME/.hpilo-scripts"
+SCRIPTS_ALL="/var/lib/hpilo-perl-control"
+SCRIPTS_APP_DIR="$APP_DIR/scripts"
+
+# list all available scripts
+if [ "$1" = "list" ]; then
+    echo "Global Scripts:"
+    echo "---------------"
+    ls -d "$SCRIPTS_ALL"/*.xml 2>/dev/null
+    echo ""
+    echo "Current User Scripts:"
+    echo "---------------------"
+    ls -d "$SCRIPTS_USER"/*.xml 2>/dev/null
+    exit 0
+fi
+
+# create new local scripts folder
+mkdir -p "$SCRIPTS_USER"
+
+# search all possible script folders
+if [ -f "$SCRIPTS_USER/$XML_SCRIPT" ]; then
+    SCRIPT="$SCRIPTS_USER/$XML_SCRIPT"
+elif [ -f "$SCRIPTS_ALL/$XML_SCRIPT" ]; then
+    SCRIPT="$SCRIPTS_ALL/$XML_SCRIPT"
+else
+    SCRIPT="$SCRIPTS_APP_DIR/$XML_SCRIPT"
+fi
+
+# resolve the hostname
+# locfg.pl does not properly resolve the hostname when using /etc/hosts
+ILO_HOST_IP=$(getent ahosts "$ILO_HOST" | sed -n 's/ *STREAM.*//p')
+
+# execute ilo command
+ILO_RESULT=$(perl "/usr/local/bin/locfg.pl" \
+    -s "$ILO_HOST_IP" \
+    -u "$ILO_USER" \
+    -p "$ILO_PASS" \
+    -f "$SCRIPT")
+
+STATUS=$?
+
+# check if locfg.pl command is working
+if [ "$STATUS" -eq 0 ]; then
+    :
+else
+    echo "Warning: iLO or HTTP connection error"
+    echo "$ILO_RESULT"
+    exit 1
+fi
+
+# if there is no data show warnings
+if [ -z "${ILO_RESULT}" ]; then
+    echo "Warning: no iLO data"
+    exit
+elif echo "$ILO_RESULT" | grep -q "Bad Request"; then
+    echo "Warning: Server does not support iLO"
+    exit
+fi
+
+# show iLO output
+if [ "${FIND_DATA}" = "False" ]; then
+    # dont show any output
+    :
+elif [ -n "${FIND_DATA}" ]; then
+    # only show relevant information
+    if [ "${XML_SCRIPT}" = "Get_IML.xml" ]; then
+        # only show errors of the current year
+        ERRORDATE=$(date +"%Y")
+        echo "$ILO_RESULT" |
+            grep -A 2 "${ERRORDATE}" |
+            grep "$FIND_DATA" |
+            grep -v "Unplugged" |
+            sed \
+                -e 's/  DESCRIPTION=//g' \
+                -e 's|["'\'']||g' || true
+    elif [ "${XML_SCRIPT}" = "crate_activate_ilo_license.xml" ]; then
+        # todo: parsing xml sucks, find a proper parser
+        echo "$ILO_RESULT" | grep "$FIND_DATA" |
+            grep -oP "(?<=\").*(?=\')" || true
+    else
+        # todo: parsing xml sucks, find a proper parser
+        echo "$ILO_RESULT" | grep "$FIND_DATA" |
+            grep -oP "(?<=\").*(?=\")" || true
+    fi
+else
+    # show whole XML output
+    echo "$ILO_RESULT"
+fi
