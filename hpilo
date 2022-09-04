@@ -6,10 +6,10 @@ if [ -z "${1}" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
     echo "List all available scripts:"
     echo "  hpilo list"
     echo "Usage:"
-    echo "  hpilo <HOST> <USER> <PASS> <XML_SCRIPT> <FIND_STRING>"
+    echo "  hpilo <HOST> <USER> <PASS> <XML_SCRIPT> <FIND_STRING> -u"
     echo "Example:"
     echo "  hpilo sqlserver peteradmin l33tpass Get_PowerCap.xml 'Power'"
-    echo "Use 'False' for <FIND_STRING> to supress all output."
+    echo "Add '-u' after FIND_STRING to sort and remove duplicated lines."
     echo "Put your own custom xml scripts in ~/.hpilo-scripts ."
     echo "Put firmware/bios update files in ~/.hpilo-scripts/firmware ."
     echo "Good practice is to copy a script from /var/lib/hpilo-perl-control"
@@ -17,12 +17,42 @@ if [ -z "${1}" ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
     exit 0
 fi
 
+# must run as normal user
+if [ "$(id -u)" = 0 ]; then
+    echo 'This script must be run as a normal user, not root!' >&2
+    exit 1
+fi
+
+# need to go to HOME directoy for XML path to work
+cd "$HOME" || exit 1
+
 # variables
 ILO_HOST="$1"
 ILO_USER="$2"
 ILO_PASS="$3"
 XML_SCRIPT="$4"
 FIND_DATA="$5"
+FIND_UNIQ="$6"
+
+if [ -z "$1" ]; then
+    echo "Please provide the parameter ILO_HOST"
+    exit 1
+fi
+
+if [ -z "$2" ]; then
+    echo "Please provide the parameter ILO_USER"
+    exit 1
+fi
+
+if [ -z "$3" ]; then
+    echo "Please provide the parameter ILO_PASS"
+    exit 1
+fi
+
+if [ -z "$4" ]; then
+    echo "Please provide the parameter XML_SCRIPT"
+    exit 1
+fi
 
 # get the directory name of the scripts exe
 APP_DIR_FULL=$(realpath "$0")
@@ -88,32 +118,11 @@ elif echo "$ILO_RESULT" | grep -q "Bad Request"; then
     exit
 fi
 
+OUT_DATA=$(echo "$ILO_RESULT" | grep -i "$FIND_DATA")
+
 # show iLO output
-if [ "${FIND_DATA}" = "False" ]; then
-    # dont show any output
-    :
-elif [ -n "${FIND_DATA}" ]; then
-    # only show relevant information
-    if [ "${XML_SCRIPT}" = "Get_IML.xml" ]; then
-        # only show errors of the current year
-        ERRORDATE=$(date +"%Y")
-        echo "$ILO_RESULT" |
-            grep -A 2 "${ERRORDATE}" |
-            grep "$FIND_DATA" |
-            grep -v "Unplugged" |
-            sed \
-                -e 's/  DESCRIPTION=//g' \
-                -e 's|["'\'']||g' || true
-    elif [ "${XML_SCRIPT}" = "crate_activate_ilo_license.xml" ]; then
-        # todo: parsing xml sucks, find a proper parser
-        echo "$ILO_RESULT" | grep "$FIND_DATA" |
-            grep -oP "(?<=\").*(?=\')" || true
-    else
-        # todo: parsing xml sucks, find a proper parser
-        echo "$ILO_RESULT" | grep "$FIND_DATA" |
-            grep -oP "(?<=\").*(?=\")" || true
-    fi
+if [ "$FIND_UNIQ" = "-u" ]; then
+    echo "$OUT_DATA" | sort | uniq
 else
-    # show whole XML output
-    echo "$ILO_RESULT"
+    echo "$OUT_DATA"
 fi
